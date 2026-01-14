@@ -1,3 +1,4 @@
+
 # Python Port Scanner
 
 ## Description
@@ -19,3 +20,5 @@ A simple Python port scanner that checks common TCP ports on a target host and o
 2. Run a scan:
    ```bash
    python scanner.py example.com
+   python scanner.py example.com --banner
+
