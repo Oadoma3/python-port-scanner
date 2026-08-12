@@ -32,19 +32,29 @@ def scan_port(host: str, port: int, timeout: float = 0.8) -> bool:
 
 
 def grab_banner(host: str, port: int, timeout: float = 1.0) -> str:
+    """Attempt to read a banner from an open port (best-effort)."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
             s.connect((host, port))
             try:
-                s.sendall(b"\r\n")
+                if port in (80, 8080, 8000):
+                    s.sendall(b"GET / HTTP/1.0\r\nHost: " + host.encode() + b"\r\n\r\n")
+                else:
+                    s.sendall(b"\r\n")
             except OSError:
                 pass
             data = s.recv(1024)
             banner = data.decode(errors="ignore").strip()
-            return banner if banner else "(no banner)"
+            # For HTTP, extract just the Server header if present
+            if port in (80, 8080, 8000) and "Server:" in banner:
+                for line in banner.splitlines():
+                    if line.startswith("Server:"):
+                        return line.strip()
+            return banner.splitlines()[0] if banner else "(no banner)"
     except OSError:
         return "(banner grab failed)"
+
 
 
 def main():
