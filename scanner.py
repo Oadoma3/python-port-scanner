@@ -1,6 +1,7 @@
 import sys
 import socket
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 COMMON_PORTS = [
     21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143,
@@ -10,7 +11,6 @@ COMMON_PORTS = [
 
 
 def parse_port_range(port_arg: str) -> list[int]:
-    """Parse a port range string like '1-1024' or '80,443,8080' into a list of ints."""
     ports = []
     for part in port_arg.split(","):
         part = part.strip()
@@ -23,7 +23,6 @@ def parse_port_range(port_arg: str) -> list[int]:
 
 
 def scan_port(host: str, port: int, timeout: float = 0.8) -> bool:
-    """Return True if TCP port is open."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
@@ -33,7 +32,6 @@ def scan_port(host: str, port: int, timeout: float = 0.8) -> bool:
 
 
 def grab_banner(host: str, port: int, timeout: float = 1.0) -> str:
-    """Attempt to read a banner from an open port (best-effort)."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
@@ -55,21 +53,11 @@ def main():
         description="A simple TCP port scanner with optional banner grabbing.",
     )
     parser.add_argument("host", help="Target hostname or IP address")
-    parser.add_argument(
-        "--banner", action="store_true", help="Attempt to grab service banners from open ports"
-    )
-    parser.add_argument(
-        "-p", "--ports",
-        help="Port range or list to scan (e.g. 1-1024 or 80,443,8080). Defaults to common ports.",
-        default=None,
-    )
-    parser.add_argument(
-        "--timeout", type=float, default=0.8,
-        help="Connection timeout in seconds per port (default: 0.8)",
-    )
-    parser.add_argument(
-        "--output", help="Save results to a file (e.g. results.txt)", default=None
-    )
+    parser.add_argument("--banner", action="store_true", help="Attempt to grab service banners from open ports")
+    parser.add_argument("-p", "--ports", help="Port range or list (e.g. 1-1024 or 80,443,8080). Defaults to common ports.", default=None)
+    parser.add_argument("--timeout", type=float, default=0.8, help="Connection timeout in seconds per port (default: 0.8)")
+    parser.add_argument("--output", help="Save results to a file (e.g. results.txt)", default=None)
+    parser.add_argument("--threads", type=int, default=100, help="Number of concurrent threads (default: 100)")
     args = parser.parse_args()
 
     ports = parse_port_range(args.ports) if args.ports else COMMON_PORTS
@@ -82,20 +70,28 @@ def main():
 
     lines = []
     lines.append("\n=== Python Port Scanner ===")
-    lines.append(f"Target : {args.host} ({ip})")
-    lines.append(f"Ports  : {len(ports)} ports")
-    lines.append(f"Banner : {'ON' if args.banner else 'OFF'}")
-    lines.append(f"Timeout: {args.timeout}s\n")
+    lines.append(f"Target  : {args.host} ({ip})")
+    lines.append(f"Ports   : {len(ports)} ports")
+    lines.append(f"Threads : {args.threads}")
+    lines.append(f"Banner  : {'ON' if args.banner else 'OFF'}")
+    lines.append(f"Timeout : {args.timeout}s\n")
 
     open_ports = []
-    for port in ports:
-        if scan_port(ip, port, timeout=args.timeout):
-            open_ports.append(port)
-            if args.banner:
-                banner = grab_banner(ip, port)
-                lines.append(f"[OPEN] {port:>5}  {banner}")
-            else:
-                lines.append(f"[OPEN] {port:>5}")
+    with ThreadPoolExecutor(max_workers=args.threads) as executor:
+        futures = {executor.submit(scan_port, ip, port, args.timeout): port for port in ports}
+        for future in as_completed(futures):
+            port = futures[future]
+            if future.result():
+                open_ports.append(port)
+
+    open_ports.sort()
+
+    for port in open_ports:
+        if args.banner:
+            banner = grab_banner(ip, port)
+            lines.append(f"[OPEN] {port:>5}  {banner}")
+        else:
+            lines.append(f"[OPEN] {port:>5}")
 
     lines.append("\nSummary:")
     if not open_ports:
